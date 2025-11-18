@@ -4,6 +4,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import streamlit as st
+import numpy as np
 
 Base = declarative_base()
 
@@ -12,25 +13,20 @@ class Prediction(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    
     startup_name = Column(String(255), nullable=False)
     industry = Column(String(100), nullable=False)
     country = Column(String(100), nullable=False)
     state = Column(String(100))
     city = Column(String(100))
     locality = Column(String(255))
-    
     team_size = Column(Integer)
     founding_year = Column(Integer)
     business_model = Column(String(100))
-    
     funding_amount = Column(Float)
     currency_code = Column(String(10))
     currency_symbol = Column(String(10))
-    
     success_probability = Column(Float, nullable=False)
     confidence_interval = Column(Float)
-    
     industry_metrics = Column(JSON)
     model_predictions = Column(JSON)
     model_accuracies = Column(JSON)
@@ -65,7 +61,6 @@ def get_engine():
     database_url = os.getenv('DATABASE_URL')
     if not database_url:
         raise ValueError("DATABASE_URL environment variable not set")
-    
     engine = create_engine(database_url, pool_pre_ping=True)
     return engine
 
@@ -79,6 +74,12 @@ def get_session():
     Session = sessionmaker(bind=engine)
     return Session()
 
+def convert(val):
+    # Convert NumPy types and handle None
+    if isinstance(val, np.generic):
+        return val.item()
+    return val
+
 def save_prediction(startup_data, prediction_result):
     session = get_session()
     try:
@@ -89,14 +90,14 @@ def save_prediction(startup_data, prediction_result):
             state=startup_data.get('state'),
             city=startup_data.get('city'),
             locality=startup_data.get('locality'),
-            team_size=startup_data.get('team_size'),
-            founding_year=startup_data.get('founding_year'),
+            team_size=convert(startup_data.get('team_size')),
+            founding_year=convert(startup_data.get('founding_year')),
             business_model=startup_data.get('business_model'),
-            funding_amount=startup_data.get('funding_amount'),
+            funding_amount=convert(startup_data.get('funding_amount')),
             currency_code=startup_data.get('currency', {}).get('code'),
             currency_symbol=startup_data.get('currency', {}).get('symbol'),
-            success_probability=prediction_result.get('success_probability'),
-            confidence_interval=prediction_result.get('confidence_interval'),
+            success_probability=convert(prediction_result.get('success_probability')),
+            confidence_interval=convert(prediction_result.get('confidence_interval')),
             industry_metrics=startup_data.get('industry_metrics', {}),
             model_predictions=prediction_result.get('model_predictions', {}),
             model_accuracies=prediction_result.get('model_accuracies', {}),
@@ -131,12 +132,10 @@ def get_predictions_by_date_range(start_date=None, end_date=None):
     session = get_session()
     try:
         query = session.query(Prediction)
-        
         if start_date:
             query = query.filter(Prediction.created_at >= start_date)
         if end_date:
             query = query.filter(Prediction.created_at <= end_date)
-        
         predictions = query.order_by(Prediction.created_at.desc()).all()
         return [p.to_dict() for p in predictions]
     finally:
@@ -146,14 +145,12 @@ def get_predictions_by_filters(industry=None, country=None, business_model=None)
     session = get_session()
     try:
         query = session.query(Prediction)
-        
         if industry:
             query = query.filter(Prediction.industry == industry)
         if country:
             query = query.filter(Prediction.country == country)
         if business_model:
             query = query.filter(Prediction.business_model == business_model)
-        
         predictions = query.order_by(Prediction.created_at.desc()).all()
         return [p.to_dict() for p in predictions]
     finally:

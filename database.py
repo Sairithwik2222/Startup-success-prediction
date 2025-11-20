@@ -57,10 +57,10 @@ class Prediction(Base):
         }
 
 @st.cache_resource
+@st.cache_resource
 def get_engine():
-    database_url = os.getenv('DATABASE_URL')
-    if not database_url:
-        raise ValueError("DATABASE_URL environment variable not set")
+    database_url = st.secrets["DATABASE_URL"]   # FIXED
+
     engine = create_engine(database_url, pool_pre_ping=True)
     return engine
 

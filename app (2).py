@@ -1,4 +1,3 @@
-
 # Clean C2 with minimal comment
 import streamlit as st
 import plotly.graph_objects as go

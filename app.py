@@ -1,3 +1,4 @@
+from database import init_db
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
@@ -11,6 +12,7 @@ from industry_metrics import get_industry_specific_fields, get_all_industries, g
 from ml_model import StartupSuccessPredictor
 from dashboard import render_dashboard
 from database import init_db, save_prediction
+init_db()
 
 st.set_page_config(page_title="Startup Success Predictor",
                    page_icon="🚀",
@@ -87,11 +89,6 @@ if 'predictor' not in st.session_state:
         st.session_state.predictor.train_models()
 if 'page' not in st.session_state:
     st.session_state.page = 'Prediction Tool'
-if 'db_initialized' not in st.session_state:
-    init_db()
-    st.session_state.db_initialized = True
-
-
 def reset_form():
     st.session_state.step = 1
     st.session_state.startup_data = {}

@@ -57,7 +57,6 @@ class Prediction(Base):
         }
 
 @st.cache_resource
-@st.cache_resource
 def get_engine():
     database_url = st.secrets["DATABASE_URL"]   # FIXED
 

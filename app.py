@@ -12,7 +12,7 @@ from currency_data import get_currency_for_country
 from industry_metrics import get_industry_specific_fields, get_all_industries, get_business_models
 from ml_model import StartupSuccessPredictor
 
-# Disable DB init call
+# ---------------------- INIT ----------------------
 init_db()
 
 st.set_page_config(
@@ -30,10 +30,200 @@ st.markdown("""
     padding: 15px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 }
+.success-box {
+    background-color: #d4edda;
+    border: 2px solid #28a745;
+    border-radius: 10px;
+    padding: 20px;
+}
+.info-box {
+    background-color: #d1ecf1;
+    border: 2px solid #17a2b8;
+    border-radius: 10px;
+    padding: 15px;
+}
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------------- SESSION VARS ----------------------
+if 'step' not in st.session_state:
+    st.session_state.step = 1
+if 'startup_data' not in st.session_state:
+    st.session_state.startup_data = {}
+if 'predictor' not in st.session_state:
+    with st.spinner("Loading AI Models..."):
+        st.session_state.predictor = StartupSuccessPredictor()
+        st.session_state.predictor.train_models()
 
+
+# ---------------------- UTIL ----------------------
+def reset_form():
+    st.session_state.step = 1
+    st.session_state.startup_data = {}
+    st.rerun()
+
+def format_currency(amount, currency):
+    return f"{currency['symbol']}{amount:,.2f}"
+
+
+# ---------------------- MAIN TOOL ----------------------
+def render_prediction_tool():
+
+    st.title("🚀 Startup Success Prediction Platform")
+    st.progress((st.session_state.step - 1) / 4)
+    st.markdown("---")
+
+    # ------- STEP 1 -------
+    if st.session_state.step == 1:
+        st.header("Step 1: Basic Startup Information")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            startup_name = st.text_input("Startup Name *",
+                                         st.session_state.startup_data.get('startup_name', ''))
+            industry = st.selectbox("Industry *", get_all_industries())
+            team_size = st.number_input("Team Size *", 1, 1000,
+                                        st.session_state.startup_data.get('team_size', 5))
+
+        with col2:
+            current_year = datetime.now().year
+            founding_year = st.number_input("Founding Year *", 2000, current_year,
+                                            st.session_state.startup_data.get('founding_year', current_year))
+
+            business_models = get_business_models()
+            selected_model = st.selectbox("Business Model *", list(business_models.keys()))
+
+        if st.button("Next →"):
+            if startup_name.strip():
+                st.session_state.startup_data.update({
+                    "startup_name": startup_name,
+                    "industry": industry,
+                    "team_size": team_size,
+                    "founding_year": founding_year,
+                    "business_model": selected_model
+                })
+                st.session_state.step = 2
+                st.rerun()
+            else:
+                st.error("Please enter the startup name")
+
+    # ------- STEP 2 -------
+    elif st.session_state.step == 2:
+        st.header("Step 2: Location & Funding")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            countries = get_all_countries()
+            country = st.selectbox("Country *", countries)
+
+            states_dict = get_states_for_country(country)
+            states = list(states_dict.keys()) if states_dict else ["Default State"]
+            state = st.selectbox("State/Region *", states)
+
+            cities = get_cities_for_state(country, state)
+            city = st.selectbox("City *", cities if cities else ["Default City"])
+
+            locality = st.text_input("Locality *",
+                                     st.session_state.startup_data.get('locality', ''))
+
+        with col2:
+            currency = get_currency_for_country(country)
+            st.info(f"Currency: **{currency['name']} ({currency['code']})**")
+
+            funding_amount = st.number_input(
+                f"Funding Amount ({currency['symbol']})", 0.0, 1_000_000_000.0,
+                float(st.session_state.startup_data.get('funding_amount', 0))
+            )
+
+        if st.button("Next →"):
+            if locality.strip():
+                st.session_state.startup_data.update({
+                    "country": country,
+                    "state": state,
+                    "city": city,
+                    "locality": locality.strip(),
+                    "funding_amount": funding_amount,
+                    "currency": currency
+                })
+                st.session_state.step = 3
+                st.rerun()
+            else:
+                st.error("Enter locality")
+
+        if st.button("← Back"):
+            st.session_state.step = 1
+            st.rerun()
+
+    # ------- STEP 3 -------
+    elif st.session_state.step == 3:
+        st.header("Step 3: Industry Specific Details")
+
+        industry = st.session_state.startup_data["industry"]
+        fields = get_industry_specific_fields(industry)['fields']
+
+        metrics = {}
+
+        for f in fields:
+            if f["type"] == "number":
+                metrics[f["name"]] = st.number_input(f["label"], value=f.get("default", 0))
+            elif f["type"] == "select":
+                metrics[f["name"]] = st.selectbox(f["label"], f["options"])
+            elif f["type"] == "slider":
+                metrics[f["name"]] = st.slider(f["label"], f["min"], f["max"], f["default"])
+
+        if st.button("Generate Prediction 🎯"):
+            st.session_state.startup_data["industry_metrics"] = metrics
+            st.session_state.step = 4
+            st.rerun()
+
+        if st.button("← Back"):
+            st.session_state.step = 2
+            st.rerun()
+
+    # ------- STEP 4 -------
+    elif st.session_state.step == 4:
+        st.header("🎯 Success Prediction Results")
+
+        with st.spinner("Analyzing..."):
+            result = st.session_state.predictor.predict(st.session_state.startup_data)
+
+            try:
+                save_prediction(st.session_state.startup_data, result)
+            except:
+                pass
+
+        success_prob = result["success_probability"]
+        confidence = result["confidence_interval"]
+
+        st.markdown(f"""
+        <div class="success-box" style="text-align: center;">
+            <h2 style="color:#28a745">Success Probability</h2>
+            <h1 style="font-size:4em; margin:0;">{success_prob:.1f}%</h1>
+            <p>Confidence Interval: ±{confidence:.1f}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Restart
+        if st.button("🔄 New Prediction"):
+            reset_form()
+
+
+# ---------------------- DASHBOARD PLACEHOLDER ----------------------
+def render_dashboard():
+    st.title("📊 Analytics Dashboard")
+    st.info("Dashboard functionality coming soon...")
+
+
+# ---------------------- SIDEBAR NAV ----------------------
+st.sidebar.markdown("## 🚀 Navigation")
+page = st.sidebar.radio("Select Page:", ["Prediction Tool", "Analytics Dashboard"])
+
+if page == "Prediction Tool":
+    render_prediction_tool()
+elif page == "Analytics Dashboard":
+    render_dashboard()
 # ---------------------- SESSION ----------------------
 if 'step' not in st.session_state:
     st.session_state.step = 1

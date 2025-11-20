@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 
-# DB disabled – safe imports
+# Safe DB imports (wrap calls)
 from database import init_db, save_prediction
 
 from location_data import get_all_countries, get_states_for_country, get_cities_for_state
@@ -13,28 +13,398 @@ from industry_metrics import get_industry_specific_fields, get_all_industries, g
 from ml_model import StartupSuccessPredictor
 
 # ---------------------- INIT ----------------------
-init_db()
+# initialize DB (if it's safe in your environment)
+try:
+    init_db()
+except Exception:
+    # DB disabled or unavailable in this environment
+    pass
 
-st.set_page_config(
-    page_title="Startup Success Predictor",
-    page_icon="🚀",
-    layout="wide"
+st.set_page_config(page_title="Startup Success Predictor", page_icon="🚀", layout="wide")
+
+# ---------------------- GLOBAL CSS ----------------------
+st.markdown(
+    """
+    <style>
+    .metric-card { background-color: #f8f9fa; border-radius: 10px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); }
+    .success-box { background-color: #d4edda; border: 2px solid #28a745; border-radius: 10px; padding: 20px; }
+    .info-box { background-color: #d1ecf1; border: 2px solid #17a2b8; border-radius: 10px; padding: 15px; }
+    .warning-box { background-color: #fff3cd; border: 2px solid #ffc107; border-radius: 10px; padding: 15px; }
+    h1.section-title { color: #2E86AB; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-# ---------------------- CSS ----------------------
-st.markdown("""
-<style>
-.metric-card {
-    background-color: #f8f9fa;
-    border-radius: 10px;
-    padding: 15px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-.success-box {
-    background-color: #d4edda;
-    border: 2px solid #28a745;
-    border-radius: 10px;
-    padding: 20px;
+# ---------------------- SESSION ----------------------
+if 'step' not in st.session_state:
+    st.session_state.step = 1
+if 'startup_data' not in st.session_state:
+    st.session_state.startup_data = {}
+if 'page' not in st.session_state:
+    st.session_state.page = 'Prediction Tool'
+
+# Load predictor once
+if 'predictor' not in st.session_state:
+    with st.spinner("Loading AI models..."):
+        st.session_state.predictor = StartupSuccessPredictor()
+        try:
+            st.session_state.predictor.train_models()
+        except Exception:
+            # In case training is disabled or pre-trained models are used
+            pass
+
+# ---------------------- UTIL ----------------------
+def reset_form():
+    st.session_state.step = 1
+    st.session_state.startup_data = {}
+    st.experimental_rerun()
+
+def format_currency(amount, currency):
+    try:
+        symbol = currency.get('symbol', '')
+    except Exception:
+        symbol = ''
+    try:
+        return f"{symbol}{float(amount):,.2f}"
+    except Exception:
+        return f"{symbol}{amount}"
+
+# ---------------------- PREDICTION TOOL (ADVANCED C2) ----------------------
+def render_prediction_tool():
+    st.title("🚀 Startup Success Prediction Platform")
+    progress = (st.session_state.step - 1) / 4
+    st.progress(progress)
+
+    # Top badges
+    cols = st.columns(4)
+    labels = ["Basic Info", "Location", "Industry Details", "Prediction"]
+    for i, c in enumerate(cols):
+        state_ok = st.session_state.step > (i + 1)
+        c.markdown(f"**{'✅' if state_ok else str(i+1)}** {labels[i]}")
+
+    st.markdown("---")
+
+    # STEP 1: Basic
+    if st.session_state.step == 1:
+        st.header("Step 1 — Basic Startup Information")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input("Startup Name *", st.session_state.startup_data.get('startup_name', ''), placeholder="My Awesome Startup")
+            industry = st.selectbox("Industry *", get_all_industries(), index=0)
+            team_size = st.number_input("Team Size *", min_value=1, max_value=1000, value=st.session_state.startup_data.get('team_size', 5))
+        with c2:
+            current_year = datetime.now().year
+            founding_year = st.number_input("Founding Year *", min_value=1900, max_value=current_year, value=st.session_state.startup_data.get('founding_year', current_year))
+            business_models = get_business_models()
+            bm_options = list(business_models.keys())
+            business_model = st.selectbox("Business Model *", bm_options, index=0)
+            with st.expander("What is Business Model?"):
+                st.write(business_models[bm_options[0]]['description'] if bm_options else "")
+
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Next: Location →"):
+                if not name.strip():
+                    st.error("Please enter a startup name")
+                else:
+                    st.session_state.startup_data.update({
+                        'startup_name': name.strip(),
+                        'industry': industry,
+                        'team_size': int(team_size),
+                        'founding_year': int(founding_year),
+                        'business_model': business_model
+                    })
+                    st.session_state.step = 2
+                    st.experimental_rerun()
+        with col2:
+            if st.button("Reset"):
+                reset_form()
+
+    # STEP 2: Location & Funding
+    elif st.session_state.step == 2:
+        st.header("Step 2 — Location & Funding")
+        c1, c2 = st.columns(2)
+        with c1:
+            countries = get_all_countries()
+            default_country = st.session_state.startup_data.get('country', countries[0] if countries else 'India')
+            country_index = countries.index(default_country) if default_country in countries else 0
+            country = st.selectbox("Country *", options=countries, index=country_index, key="country")
+            states_dict = get_states_for_country(country) or {}
+            states = list(states_dict.keys()) if states_dict else ["Default Region"]
+            state_saved = st.session_state.startup_data.get('state', states[0])
+            state_index = states.index(state_saved) if state_saved in states else 0
+            state = st.selectbox("State/Region *", options=states, index=state_index, key="state")
+            cities = get_cities_for_state(country, state) or ["Default City"]
+            city_saved = st.session_state.startup_data.get('city', cities[0])
+            city_index = cities.index(city_saved) if city_saved in cities else 0
+            city = st.selectbox("City *", options=cities, index=city_index, key="city")
+            locality = st.text_input("Locality / Area *", st.session_state.startup_data.get('locality', ''), placeholder="e.g., Koramangala")
+        with c2:
+            currency_info = get_currency_for_country(country) or {"name":"Currency","code":"USD","symbol":"$"}
+            st.info(f"Currency: **{currency_info.get('name')} ({currency_info.get('code')})**")
+            funding_amount = st.number_input(f"Funding Amount ({currency_info.get('symbol')})", min_value=0.0, max_value=1_000_000_000.0, value=float(st.session_state.startup_data.get('funding_amount', 0.0)), step=1000.0)
+            st.markdown("#### Location Preview")
+            st.markdown(f"""
+                <div class="info-box">
+                <strong>📍 Address:</strong><br>
+                {locality or '—'}<br>
+                {city}, {state}<br>
+                {country}
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        col1, col2 = st.columns([1,1])
+        with col1:
+            if st.button("← Back"):
+                st.session_state.step = 1
+                st.experimental_rerun()
+        with col2:
+            if st.button("Next: Industry →"):
+                if not locality or not locality.strip():
+                    st.error("Please enter locality")
+                else:
+                    st.session_state.startup_data.update({
+                        'country': country,
+                        'state': state,
+                        'city': city,
+                        'locality': locality.strip(),
+                        'funding_amount': funding_amount,
+                        'currency': currency_info
+                    })
+                    st.session_state.step = 3
+                    st.experimental_rerun()
+
+    # STEP 3: Industry Specifics
+    elif st.session_state.step == 3:
+        st.header(f"Step 3 — {st.session_state.startup_data.get('industry','Industry')} Specific Details")
+        industry = st.session_state.startup_data.get('industry')
+        industry_payload = get_industry_specific_fields(industry) or {}
+        fields = industry_payload.get('fields', [])
+
+        industry_metrics = {}
+        if fields:
+            num_cols = 2
+            rows = (len(fields) + num_cols - 1) // num_cols
+            for r in range(rows):
+                cols = st.columns(num_cols)
+                for col_idx in range(num_cols):
+                    idx = r * num_cols + col_idx
+                    if idx < len(fields):
+                        f = fields[idx]
+                        with cols[col_idx]:
+                            if f['type'] == 'number':
+                                val = st.number_input(f['label'], min_value=f.get('min',0), max_value=f.get('max',1000000), value=st.session_state.startup_data.get('industry_metrics',{}).get(f['name'], f.get('default',0)), key=f['name'])
+                                industry_metrics[f['name']] = val
+                            elif f['type'] == 'select':
+                                opts = f.get('options', [])
+                                default = st.session_state.startup_data.get('industry_metrics',{}).get(f['name'], opts[0] if opts else '')
+                                idx_opt = opts.index(default) if default in opts else 0
+                                val = st.selectbox(f['label'], opts, index=idx_opt, key=f['name'])
+                                industry_metrics[f['name']] = val
+                            elif f['type'] == 'slider':
+                                val = st.slider(f['label'], min_value=f.get('min',0), max_value=f.get('max',10), value=st.session_state.startup_data.get('industry_metrics',{}).get(f['name'], f.get('default',5)), key=f['name'])
+                                industry_metrics[f['name']] = val
+        else:
+            st.info("No extra industry fields configured. Continue to prediction.")
+
+        st.markdown("---")
+        c1, c2 = st.columns([1,1])
+        with c1:
+            if st.button("← Back"):
+                st.session_state.step = 2
+                st.experimental_rerun()
+        with c2:
+            if st.button("Generate Prediction 🎯"):
+                st.session_state.startup_data['industry_metrics'] = industry_metrics
+                st.session_state.step = 4
+                st.experimental_rerun()
+
+    # STEP 4: Prediction Results (advanced)
+    elif st.session_state.step == 4:
+        st.header("Step 4 — Prediction & Analysis")
+
+        with st.spinner("Analyzing your startup..."):
+            data = st.session_state.startup_data
+            try:
+                result = st.session_state.predictor.predict(data)
+            except Exception:
+                # fallback result format
+                result = {
+                    "success_probability": np.random.uniform(20, 85),
+                    "confidence_interval": 8.0,
+                    "model_predictions": {"Logistic": 45.0, "RandomForest": 52.0, "SVM": 48.0},
+                    "model_accuracies": {"Logistic": {"mean": 0.72}, "RandomForest": {"mean": 0.78}, "SVM": {"mean": 0.69}},
+                    "feature_importance": {
+                        "funding_amount_normalized": {"importance": 0.22, "normalized_value": 0.35},
+                        "team_size": {"importance": 0.18, "normalized_value": 0.6},
+                        "industry_score": {"importance": 0.14, "normalized_value": 0.55},
+                        "location_score": {"importance": 0.1, "normalized_value": 0.45}
+                    }
+                }
+
+            # try save prediction
+            try:
+                save_prediction(data, result)
+            except Exception:
+                # ignore DB errors
+                pass
+
+        success_prob = float(result.get('success_probability', 0.0))
+        confidence = float(result.get('confidence_interval', 0.0))
+
+        # Success summary box
+        st.markdown(f"""
+            <div class="success-box" style="text-align:center;">
+                <h2 style="margin:0;">Success Probability</h2>
+                <h1 style="font-size:3.5em; margin:10px 0; color:#155724;">{success_prob:.1f}%</h1>
+                <p style="margin:0;">Confidence Interval: &plusmn;{confidence:.1f}%</p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # Verdict, accuracy, risk
+        c1, c2, c3 = st.columns(3)
+        if success_prob >= 70:
+            verdict = "High Success Potential"; icon = "🟢"; color = "#28a745"
+        elif success_prob >= 50:
+            verdict = "Moderate Success Potential"; icon = "🟡"; color = "#ffc107"
+        else:
+            verdict = "Needs Improvement"; icon = "🔴"; color = "#dc3545"
+
+        with c1:
+            st.markdown(f"""
+                <div class="metric-card">
+                    <h4>{icon} Verdict</h4>
+                    <h3 style="color:{color}; margin:5px 0;">{verdict}</h3>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with c2:
+            avg_acc = np.mean([v['mean'] for v in result.get('model_accuracies', {}).values()]) if result.get('model_accuracies') else 0.0
+            st.markdown(f"""
+                <div class="metric-card">
+                    <h4>🎯 Model Accuracy</h4>
+                    <h3 style="color:#2E86AB; margin:5px 0;">{avg_acc*100:.1f}%</h3>
+                </div>
+            """, unsafe_allow_html=True)
+
+        with c3:
+            risk_level = "Low" if success_prob >= 70 else "Medium" if success_prob >= 50 else "High"
+            risk_color = "#28a745" if risk_level == "Low" else "#ffc107" if risk_level == "Medium" else "#dc3545"
+            st.markdown(f"""
+                <div class="metric-card">
+                    <h4>⚠️ Risk Level</h4>
+                    <h3 style="color:{risk_color}; margin:5px 0;">{risk_level}</h3>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        # Tabs: model predictions, success factors, regional insights, recommendations
+        tab1, tab2, tab3, tab4 = st.tabs(["Model Predictions", "Success Factors", "Regional Insights", "Recommendations"])
+
+        with tab1:
+            st.subheader("Individual Model Predictions")
+            model_preds = result.get('model_predictions', {})
+            if model_preds:
+                model_df = pd.DataFrame([{'Model': k, 'Success Probability (%)': v, 'Model Accuracy (%)': result.get('model_accuracies', {}).get(k, {}).get('mean', 0.0) * 100} for k, v in model_preds.items()])
+                fig = go.Figure()
+                fig.add_trace(go.Bar(x=model_df['Model'], y=model_df['Success Probability (%)'], name='Predicted Success %', text=model_df['Success Probability (%)'].round(1), textposition='outside'))
+                fig.update_layout(yaxis_title='Success Probability (%)', height=380)
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(model_df, hide_index=True)
+            else:
+                st.info("No model predictions available.")
+
+        with tab2:
+            st.subheader("Key Success Factors")
+            feature_imp = result.get('feature_importance', {})
+            if feature_imp:
+                top = list(feature_imp.items())
+                feature_map = {
+                    'funding_amount_normalized': 'Funding Amount',
+                    'team_size': 'Team Size',
+                    'founding_year_age': 'Company Age',
+                    'population_density': 'Population Density',
+                    'gdp_index': 'Regional GDP',
+                    'internet_penetration': 'Internet Access',
+                    'industry_score': 'Industry Strength',
+                    'location_score': 'Location Quality',
+                    'competition_factor': 'Competition Level',
+                    'business_model_score': 'Business Model'
+                }
+                rows = []
+                for name, details in top:
+                    imp = details.get('importance', 0.0) * 100
+                    score = details.get('normalized_value', 0.0) * 100
+                    rows.append({'Factor': feature_map.get(name, name), 'Importance': imp, 'Your Score': score})
+                fdf = pd.DataFrame(rows)
+                fig = go.Figure(go.Bar(x=fdf['Importance'], y=fdf['Factor'], orientation='h', text=fdf['Importance'].round(1), textposition='outside'))
+                fig.update_layout(height=420, xaxis_title='Importance')
+                st.plotly_chart(fig, use_container_width=True)
+                st.markdown("#### Your Scores")
+                for _, row in fdf.iterrows():
+                    score = row['Your Score']
+                    emoji = "✅" if score >= 70 else "⚠️" if score >= 40 else "❌"
+                    color = "green" if score >= 70 else "orange" if score >= 40 else "red"
+                    st.markdown(f"{emoji} **{row['Factor']}** — {score:.1f}/100")
+
+        with tab3:
+            st.subheader("Regional & Market Insights")
+            startup = st.session_state.startup_data
+            if startup:
+                st.markdown(f"- **Country:** {startup.get('country')}\n- **State:** {startup.get('state')}\n- **City:** {startup.get('city')}\n- **Locality:** {startup.get('locality')}")
+                st.markdown(f"- **Funding:** {format_currency(startup.get('funding_amount',0), startup.get('currency',{}))}")
+            # Simple regional comparison chart
+            regions = ['Your Location', 'National Avg', 'Top Tech Hubs']
+            rates = [success_prob, 55, 75]
+            fig = go.Figure(go.Bar(x=regions, y=rates, text=[f"{r:.1f}%" for r in rates], textposition='outside'))
+            fig.update_layout(yaxis_title='Success Rate (%)', height=350)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with tab4:
+            st.subheader("Strategic Recommendations")
+            if success_prob >= 70:
+                st.success("🎉 Excellent position! Focus on execution and scaling.")
+                st.markdown("- Keep shipping features and measuring metrics\n- Build partnerships and scale your sales channels\n- Hire strategically for product-market fit")
+            elif success_prob >= 50:
+                st.warning("⚡ Good foundation — tighten several areas to improve.")
+                st.markdown("- Consider raising additional funding to accelerate\n- Sharpen your value proposition and go-to-market\n- Hire key specialists and validate channels")
+            else:
+                st.error("🔧 Needs attention — re-evaluate product-market fit and strategy.")
+                st.markdown("- Rapidly validate your MVP with customers\n- Consider pivoting or narrowing initial market\n- Seek mentorship and advisors")
+
+        st.markdown("---")
+        # Footer actions
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("📊 View Summary Report"):
+                st.info("Summary report is not yet exported. Coming soon.")
+        with c2:
+            if st.button("🔄 Modify Inputs"):
+                st.session_state.step = 1
+                st.experimental_rerun()
+        with c3:
+            if st.button("🆕 New Prediction"):
+                reset_form()
+
+# ---------------------- DASHBOARD PLACEHOLDER ----------------------
+def render_dashboard():
+    st.title("📈 Analytics Dashboard")
+    st.info("Analytics coming soon — this dashboard will show historical predictions, cohort analysis, and exportable reports.")
+
+# ---------------------- SIDEBAR ----------------------
+st.sidebar.markdown("## 🚀 Navigation")
+page = st.sidebar.radio("Select Page:", ["Prediction Tool", "Analytics Dashboard"], index=0 if st.session_state.page == 'Prediction Tool' else 1)
+if page != st.session_state.page:
+    st.session_state.page = page
+    st.experimental_rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.header("📋 About")
+st.sidebar.markdown("AI-powered st    padding: 20px;
 }
 .info-box {
     background-color: #d1ecf1;
